@@ -5,8 +5,8 @@
 enum class OutputState
 {
 	FLOATING,
-	HIGH,
 	LOW,
+	HIGH,
 };
 
 
