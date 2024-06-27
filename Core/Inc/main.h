@@ -109,6 +109,8 @@ void Error_Handler(void);
 #define LED_ORANGE_GPIO_Port GPIOA
 #define LED_RED_Pin GPIO_PIN_6
 #define LED_RED_GPIO_Port GPIOF
+#define SPI1_CS_Pin GPIO_PIN_15
+#define SPI1_CS_GPIO_Port GPIOA
 #define DQ5_LOW_Pin GPIO_PIN_6
 #define DQ5_LOW_GPIO_Port GPIOB
 #define DQ5_HIGH_Pin GPIO_PIN_7

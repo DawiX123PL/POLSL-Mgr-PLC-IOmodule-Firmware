@@ -6,20 +6,13 @@
 #include "dma.h"
 #include "tim.h"
 #include "gpio.h"
+#include "spi.h"
 #include "plc_module_registers.hpp"
 #include "plc_adc.hpp"
+#include "output_ports.hpp"
 
-void CheckInternalShortcircuits(void);
-
-enum class OutputState;
-
-void DQ_Write(uint8_t output_number, OutputState out_state);
-
-GPIO_TypeDef *DQHigh_GetPort(uint8_t output_number);
-GPIO_TypeDef *DQLow_GetPort(uint8_t output_number);
-
-uint16_t DQHigh_GetPin(uint8_t output_number);
-uint16_t DQLow_GetPin(uint8_t output_number);
+// ------------------------------------------------------------------------------------------
+// ADC buffers
 
 struct ADCConversionResult
 {
@@ -39,9 +32,19 @@ struct ADCConversionResult
 volatile ADCConversionResult adc_conversion_result;
 volatile uint16_t ConversionTime = 0; // [us]
 
+// ------------------------------------------------------------------------------------------
+// SPI buffers
+
+constexpr int32_t spi_buffer_size = 20;
+
+volatile uint8_t spi_rx_buffer0[spi_buffer_size] = {0};
+volatile uint8_t spi_tx_buffer0[spi_buffer_size] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19};
+
+// ------------------------------------------------------------------------------------------
+// ADC callbacks
+
 extern "C" void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
-
 	ConversionTime = htim3.Instance->CNT;
 	HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
 }
@@ -51,150 +54,48 @@ extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	HAL_GPIO_TogglePin(LED_ORANGE_GPIO_Port, LED_ORANGE_Pin);
 }
 
-enum class OutputState
-{
-	FLOATING,
-	HIGH,
-	LOW,
-};
+// ------------------------------------------------------------------------------------------
+// SPI callbacks
 
-GPIO_TypeDef *DQHigh_GetPort(uint8_t output_number)
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 {
-	assert_param(output_number <= 7);
-	switch (output_number)
-	{
-	case 0:
-		return DQ0_HIGH_GPIO_Port;
-	case 1:
-		return DQ1_HIGH_GPIO_Port;
-	case 2:
-		return DQ2_HIGH_GPIO_Port;
-	case 3:
-		return DQ3_HIGH_GPIO_Port;
-	case 4:
-		return DQ4_HIGH_GPIO_Port;
-	case 5:
-		return DQ5_HIGH_GPIO_Port;
-	case 6:
-		return DQ6_HIGH_GPIO_Port;
-	case 7:
-		return DQ7_HIGH_GPIO_Port;
-	}
-	assert_param(0);
-	return 0;
+	//	called when all data is transfered
 }
 
-uint16_t DQHigh_GetPin(uint8_t output_number)
+void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
 {
-	assert_param(output_number <= 7);
-	switch (output_number)
-	{
-	case 0:
-		return DQ0_HIGH_Pin;
-	case 1:
-		return DQ1_HIGH_Pin;
-	case 2:
-		return DQ2_HIGH_Pin;
-	case 3:
-		return DQ3_HIGH_Pin;
-	case 4:
-		return DQ4_HIGH_Pin;
-	case 5:
-		return DQ5_HIGH_Pin;
-	case 6:
-		return DQ6_HIGH_Pin;
-	case 7:
-		return DQ7_HIGH_Pin;
-	}
-	assert_param(0);
-	return 0;
+	// called when rx buffer is full (rx data overflow)
 }
 
-GPIO_TypeDef *DQLow_GetPort(uint8_t output_number)
+HAL_StatusTypeDef status;
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-	assert_param(output_number <= 7);
-	switch (output_number)
+	// this is called whenever nss pin changes state
+	if (HAL_GPIO_ReadPin(SPI1_CS_GPIO_Port, SPI1_CS_Pin))
 	{
-	case 0:
-		return DQ0_LOW_GPIO_Port;
-	case 1:
-		return DQ1_LOW_GPIO_Port;
-	case 2:
-		return DQ2_LOW_GPIO_Port;
-	case 3:
-		return DQ3_LOW_GPIO_Port;
-	case 4:
-		return DQ4_LOW_GPIO_Port;
-	case 5:
-		return DQ5_LOW_GPIO_Port;
-	case 6:
-		return DQ6_LOW_GPIO_Port;
-	case 7:
-		return DQ7_LOW_GPIO_Port;
+		//	detected risign edge (master finished communication)
+		status = HAL_SPI_Abort(&hspi1);
+		status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)spi_tx_buffer0, (uint8_t *)spi_rx_buffer0, spi_buffer_size);
 	}
-	assert_param(0);
-	return 0;
+	else
+	{
+		//	detected falling edge (master started communication)
+	}
 }
 
-uint16_t DQLow_GetPin(uint8_t output_number)
+void HAL_SPI_AbortCpltCallback(SPI_HandleTypeDef *hspi)
 {
-	assert_param(output_number <= 7);
-	switch (output_number)
-	{
-	case 0:
-		return DQ0_LOW_Pin;
-	case 1:
-		return DQ1_LOW_Pin;
-	case 2:
-		return DQ2_LOW_Pin;
-	case 3:
-		return DQ3_LOW_Pin;
-	case 4:
-		return DQ4_LOW_Pin;
-	case 5:
-		return DQ5_LOW_Pin;
-	case 6:
-		return DQ6_LOW_Pin;
-	case 7:
-		return DQ7_LOW_Pin;
-	}
-	assert_param(0);
-	return 0;
+	status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)spi_tx_buffer0, (uint8_t *)spi_rx_buffer0, spi_buffer_size);
 }
 
-void DQ_Write(uint8_t output_number, OutputState out_state)
-{
-	assert_param(output_number <= 7);
+// ------------------------------------------------------------------------------------------
+// Configure Interrupt on SPI1 CS pin
 
-	//	disable all transistors
-	HAL_GPIO_WritePin(DQLow_GetPort(output_number), DQLow_GetPin(output_number), GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(DQHigh_GetPort(output_number), DQHigh_GetPin(output_number), GPIO_PIN_RESET);
 
-	//	enable lower or uppper
-	if (out_state == OutputState::HIGH)
-	{
-		HAL_GPIO_WritePin(DQHigh_GetPort(output_number), DQHigh_GetPin(output_number), GPIO_PIN_SET);
-	}
-	else if (out_state == OutputState::LOW)
-	{
-		HAL_GPIO_WritePin(DQLow_GetPort(output_number), DQLow_GetPin(output_number), GPIO_PIN_SET);
-	}
 
-	// sanity check
-	CheckInternalShortcircuits();
-}
-
-void CheckInternalShortcircuits(void)
-{
-	assert_param((HAL_GPIO_ReadPin(DQ0_HIGH_GPIO_Port, DQ0_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ0_LOW_GPIO_Port, DQ0_LOW_Pin) != 1));
-	assert_param((HAL_GPIO_ReadPin(DQ1_HIGH_GPIO_Port, DQ1_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ1_LOW_GPIO_Port, DQ1_LOW_Pin) != 1));
-	assert_param((HAL_GPIO_ReadPin(DQ2_HIGH_GPIO_Port, DQ2_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ2_LOW_GPIO_Port, DQ2_LOW_Pin) != 1));
-	assert_param((HAL_GPIO_ReadPin(DQ3_HIGH_GPIO_Port, DQ3_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ3_LOW_GPIO_Port, DQ3_LOW_Pin) != 1));
-	assert_param((HAL_GPIO_ReadPin(DQ4_HIGH_GPIO_Port, DQ4_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ4_LOW_GPIO_Port, DQ4_LOW_Pin) != 1));
-	assert_param((HAL_GPIO_ReadPin(DQ5_HIGH_GPIO_Port, DQ5_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ5_LOW_GPIO_Port, DQ5_LOW_Pin) != 1));
-	assert_param((HAL_GPIO_ReadPin(DQ6_HIGH_GPIO_Port, DQ6_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ6_LOW_GPIO_Port, DQ6_LOW_Pin) != 1));
-	assert_param((HAL_GPIO_ReadPin(DQ7_HIGH_GPIO_Port, DQ7_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ7_LOW_GPIO_Port, DQ7_LOW_Pin) != 1));
-}
+// ------------------------------------------------------------------------------------------
+// main
 
 int main(void)
 {
@@ -206,7 +107,10 @@ int main(void)
 	MX_DMA_Init();
 	MX_ADC_Init();
 	MX_TIM3_Init();
+//	MX_SPI1_Init();
+	ConfigureSPI_CS_Interrupt();
 
+	// enable adc
 	HAL_ADCEx_Calibration_Start(&hadc);
 	while (HAL_ADC_GetState(&hadc) != HAL_ADC_STATE_READY)
 	{
@@ -214,6 +118,9 @@ int main(void)
 
 	HAL_ADC_Start_DMA(&hadc, (uint32_t *)&adc_conversion_result, ADCConversionResult::length);
 	HAL_TIM_Base_Start_IT(&htim3);
+
+	// enable SPI interface
+//	HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)spi_tx_buffer0, (uint8_t *)spi_rx_buffer0, spi_buffer_size);
 
 	uint8_t output = 0;
 	while (1)
