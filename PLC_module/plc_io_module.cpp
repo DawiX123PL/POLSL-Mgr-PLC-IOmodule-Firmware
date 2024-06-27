@@ -73,11 +73,10 @@ HAL_StatusTypeDef status;
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-		//	detected risign edge (master finished communication)
-		spi_received_bytes = spi_buffer_size - __HAL_DMA_GET_COUNTER(hspi1.hdmarx);
-		status = HAL_SPI_Abort(&hspi1);
-		status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)spi_tx_buffer0, (uint8_t *)spi_rx_buffer0, spi_buffer_size);
-
+	//	detected risign edge (master finished communication)
+	spi_received_bytes = spi_buffer_size - __HAL_DMA_GET_COUNTER(hspi1.hdmarx);
+	status = HAL_SPI_Abort(&hspi1);
+	status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)spi_tx_buffer0, (uint8_t *)spi_rx_buffer0, spi_buffer_size);
 }
 
 void HAL_SPI_AbortCpltCallback(SPI_HandleTypeDef *hspi)
@@ -114,6 +113,31 @@ void ConfigureSPI_CS_Interrupt(void)
 }
 
 // ------------------------------------------------------------------------------------------
+// Configure SPI1
+// STM32 Cube randomly changes this configuracion so I had to copy STm32Cube generated function
+
+void ConfigureSPI1(void)
+{
+	hspi1.Instance = SPI1;
+	hspi1.Init.Mode = SPI_MODE_SLAVE;
+	hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+	hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+	hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+	hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+	hspi1.Init.NSS = SPI_NSS_HARD_INPUT;
+	hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+	hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+	hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_ENABLE;
+	hspi1.Init.CRCPolynomial = 7;
+	hspi1.Init.CRCLength = SPI_CRC_LENGTH_8BIT;
+	hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
+	if (HAL_SPI_Init(&hspi1) != HAL_OK)
+	{
+		Error_Handler();
+	}
+}
+
+// ------------------------------------------------------------------------------------------
 // main
 
 uint8_t output = 0;
@@ -134,7 +158,8 @@ int main(void)
 	// Thanks DAnsp
 	// https://community.st.com/t5/stm32-mcus-products/spi-slave-nss-interrupt/td-p/394501
 	ConfigureSPI_CS_Interrupt();
-	MX_SPI1_Init();
+	ConfigureSPI1();
+	// MX_SPI1_Init(); // this line can be usefull in future
 
 	HAL_SPI_GetState(&hspi1);
 
@@ -150,26 +175,24 @@ int main(void)
 	// enable SPI interface
 	HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)spi_tx_buffer0, (uint8_t *)spi_rx_buffer0, spi_buffer_size);
 
-
-
 	while (1)
 	{
 
 		DQ_Write(output, state);
 		CheckInternalShortcircuits();
 
-//		DQ_Write(output, OutputState::LOW);
-//		CheckInternalShortcircuits();
-//		HAL_Delay(500);
-//
-//		DQ_Write(output, OutputState::HIGH);
-//		CheckInternalShortcircuits();
-//		HAL_Delay(500);
-//
-//		DQ_Write(output, OutputState::FLOATING);
-//		CheckInternalShortcircuits();
-//		HAL_Delay(500);
-//
-//		output = output < 7 ? output + 1 : 0;
+		//		DQ_Write(output, OutputState::LOW);
+		//		CheckInternalShortcircuits();
+		//		HAL_Delay(500);
+		//
+		//		DQ_Write(output, OutputState::HIGH);
+		//		CheckInternalShortcircuits();
+		//		HAL_Delay(500);
+		//
+		//		DQ_Write(output, OutputState::FLOATING);
+		//		CheckInternalShortcircuits();
+		//		HAL_Delay(500);
+		//
+		//		output = output < 7 ? output + 1 : 0;
 	}
 }
