@@ -1,6 +1,5 @@
 #include "output_ports.hpp"
 
-
 GPIO_TypeDef *DQHigh_GetPort(uint8_t output_number)
 {
 	assert_param(output_number <= 7);
@@ -105,26 +104,56 @@ uint16_t DQLow_GetPin(uint8_t output_number)
 	return 0;
 }
 
-void DQ_Write(uint8_t output_number, OutputState out_state)
+void DQ_WriteRegister(uint8_t level_reg, uint8_t enable_reg)
+{
+
+	for (int out_nr = 0; out_nr < 8; out_nr++)
+	{
+		bool out_level = (level_reg & (1 << out_nr)) != 0;
+		bool out_enable = (enable_reg & (1 << out_nr)) != 0;
+
+		DQ_Write(out_nr, out_level, out_enable);
+	}
+
+	CheckInternalShortcircuits();
+}
+
+void DQ_Write(uint8_t output_number, bool out_level, bool enable)
 {
 	assert_param(output_number <= 7);
+	// assert_param(out_level <= 1);
+	// assert_param(enable <= 1);
 
-	//	disable all transistors
-	HAL_GPIO_WritePin(DQLow_GetPort(output_number), DQLow_GetPin(output_number), GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(DQHigh_GetPort(output_number), DQHigh_GetPin(output_number), GPIO_PIN_RESET);
-
-	//	enable lower or uppper
-	if (out_state == OutputState::HIGH)
+	if (!enable)
 	{
+		//	disable all transistors
+		HAL_GPIO_WritePin(DQLow_GetPort(output_number), DQLow_GetPin(output_number), GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(DQHigh_GetPort(output_number), DQHigh_GetPin(output_number), GPIO_PIN_RESET);
+		// sanity check
+		CheckInternalShortcircuits();
+		return;
+	}
+
+	if (out_level)
+	{
+		// IMPORTANT NOTE
+		// First must be disabled lower transistor
+		// after that can be enabled Upper transistor
+		HAL_GPIO_WritePin(DQLow_GetPort(output_number), DQLow_GetPin(output_number), GPIO_PIN_RESET);
 		HAL_GPIO_WritePin(DQHigh_GetPort(output_number), DQHigh_GetPin(output_number), GPIO_PIN_SET);
 	}
-	else if (out_state == OutputState::LOW)
+	else
 	{
+		// IMPORTANT NOTE
+		// First must be disabled Upper transistor
+		// after that can be enabled Lower transistor
+		HAL_GPIO_WritePin(DQHigh_GetPort(output_number), DQHigh_GetPin(output_number), GPIO_PIN_RESET);
 		HAL_GPIO_WritePin(DQLow_GetPort(output_number), DQLow_GetPin(output_number), GPIO_PIN_SET);
 	}
 
 	// sanity check
 	CheckInternalShortcircuits();
+	return;
 }
 
 void CheckInternalShortcircuits(void)

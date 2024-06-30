@@ -57,6 +57,7 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define htim_adc_trigger htim3
 #define CONFIG_1_Pin GPIO_PIN_13
 #define CONFIG_1_GPIO_Port GPIOC
 #define DQ6_HIGH_Pin GPIO_PIN_14
