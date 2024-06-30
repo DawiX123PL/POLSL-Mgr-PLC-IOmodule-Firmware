@@ -138,10 +138,6 @@ void DisablePeripheralModules()
   HAL_TIM_Base_DeInit(&htim3);
 }
 
-static void LedRed(uint8_t enable)
-{
-  HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, enable);
-}
 
 static void LedOrange(uint8_t enable)
 {
@@ -158,15 +154,7 @@ static void LedRedToggle()
   HAL_GPIO_TogglePin(LED_RED_GPIO_Port, LED_RED_Pin);
 }
 
-static void LedOrangeToggle()
-{
-  HAL_GPIO_TogglePin(LED_ORANGE_GPIO_Port, LED_ORANGE_Pin);
-}
 
-static void LedGreenToggle()
-{
-  HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
-}
 
 void NoIRQDelay(uint32_t delay)
 {

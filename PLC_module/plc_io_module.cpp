@@ -1,6 +1,7 @@
 
 #include <inttypes.h>
 #include <math.h>
+#include <cstring>
 #include "main.h"
 #include "iwdg.h"
 #include "adc.h"
@@ -9,7 +10,6 @@
 #include "gpio.h"
 #include "spi.h"
 #include "crc.h"
-#include "plc_module_registers.hpp"
 #include "plc_adc.hpp"
 #include "output_ports.hpp"
 #include "device_state.hpp"
@@ -82,7 +82,6 @@ extern "C" void
 HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
 	ConversionTime = htim3.Instance->CNT;
-	HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
 
 	const uint16_t supply_voltage = AdcToMiliVolt(adc_conversion_result.input_voltage);
 	const uint16_t digital_threshold = supply_voltage >> 1; // supply_voltage / 2
@@ -124,7 +123,6 @@ HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 
 extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-	HAL_GPIO_TogglePin(LED_ORANGE_GPIO_Port, LED_ORANGE_Pin);
 }
 
 // ------------------------------------------------------------------------------------------
@@ -180,16 +178,6 @@ void HAL_SPI_AbortCpltCallback(SPI_HandleTypeDef *hspi)
 }
 
 // ------------------------------------------------------------------------------------------
-// External interrupt on CS pin
-
-// extern "C" void EXTI4_15_IRQHandler(void)
-// {
-// 	// HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_15);
-
-// 	// spi_active_tx_buffer_nr = (spi_active_tx_buffer_nr + 1) % 2;
-// }
-
-// ------------------------------------------------------------------------------------------
 // Configure Interrupt on SPI1 CS pin
 
 void ConfigureSPI_CS_Interrupt(void)
@@ -237,38 +225,24 @@ void ConfigureSPI1(void)
 // ------------------------------------------------------------------------------------------
 // LEDS
 
-static void LedRed(uint8_t enable)
+static void LedRed(bool enable)
 {
 	GPIO_PinState state = enable ? GPIO_PIN_SET : GPIO_PIN_RESET;
 	HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, state);
 }
 
-static void LedOrange(uint8_t enable)
-{
-	GPIO_PinState state = enable ? GPIO_PIN_SET : GPIO_PIN_RESET;
-	HAL_GPIO_WritePin(LED_ORANGE_GPIO_Port, LED_ORANGE_Pin, state);
-}
+//static void LedOrange(bool enable)
+//{
+//	GPIO_PinState state = enable ? GPIO_PIN_SET : GPIO_PIN_RESET;
+//	HAL_GPIO_WritePin(LED_ORANGE_GPIO_Port, LED_ORANGE_Pin, state);
+//}
 
-static void LedGreen(uint8_t enable)
+static void LedGreen(bool enable)
 {
 	GPIO_PinState state = enable ? GPIO_PIN_SET : GPIO_PIN_RESET;
 	HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, state);
 }
 
-static void LedRedToggle()
-{
-	HAL_GPIO_TogglePin(LED_RED_GPIO_Port, LED_RED_Pin);
-}
-
-static void LedOrangeToggle()
-{
-	HAL_GPIO_TogglePin(LED_ORANGE_GPIO_Port, LED_ORANGE_Pin);
-}
-
-static void LedGreenToggle()
-{
-	HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
-}
 
 // ------------------------------------------------------------------------------------------
 // get reset reason
@@ -356,13 +330,73 @@ void SetInitialErrorFlag()
 }
 
 // ------------------------------------------------------------------------------------------
-// main
+// update Digital Output and leds routine
 
-int main(void)
+void UpdateOutputRoutine()
 {
+	// check if state buffer has been updated
+	uint8_t error_byte = 0;
 
-	assert_param(spi_buffer_size > sizeof(DeviceStateBuffer));
+	// this holds digital output levels (1-Hi or 0-Low)
+	uint8_t output_level = 0;
+	// this tells if output is enabled or not (1-Enabled, 0-Hi impedance)
+	uint8_t output_enable = 0;
 
+	if (current_state_lock.TryLock())
+	{
+		output_enable = current_device_state.digital_output_enable;
+		output_level = current_device_state.digital_output_level;
+		error_byte = current_device_state.error_byte;
+
+		current_state_lock.Unlock();
+	}
+
+	// update digital outputs
+	DQ_WriteRegister(output_level, output_enable);
+	CheckInternalShortcircuits();
+
+	// blink red led in case of error;
+	const uint32_t blink_time = 1000;
+	const uint32_t blink_enable_time = 200;
+
+	bool pwm_level = (HAL_GetTick() % blink_time) < blink_enable_time;
+	bool led_red_level = (error_byte != 0) && pwm_level;
+	LedRed(led_red_level);
+}
+
+// ------------------------------------------------------------------------------------------
+// update spi buffer
+
+void UpdateSpiTxBufferRoutine()
+{
+	if (current_state_lock.TryLock())
+	{
+		if (current_state_updated)
+		{
+			// copy current state to spi buffer
+			DeviceStateBuffer *spi_buf = (DeviceStateBuffer *)GetFreeSpiBuffer();
+			DeviceState *spi_state_buf = &(spi_buf->device_state);
+
+			// move data to spi
+			memcpy(spi_state_buf, &current_device_state, sizeof(DeviceState));
+
+			// callculate crc
+			spi_buf->crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)&current_device_state, sizeof(DeviceState));
+
+			// notify that content of buffer has been moved to spi_buffer
+			current_state_updated = false;
+
+			TrySwapSpiTxBuffer();
+		}
+		current_state_lock.Unlock();
+	}
+}
+
+// ------------------------------------------------------------------------------------------
+// configure device
+
+void ConfigureDevice()
+{
 	HAL_Init();
 
 	// immediately enable WatchDog
@@ -403,68 +437,29 @@ int main(void)
 	// enable SPI interface
 	status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)GetActiveSpiBuffer(), (uint8_t *)spi_rx_buffer, spi_buffer_size);
 
+	// signal that device is working correctly
+	LedGreen(true);
+}
+
+// ------------------------------------------------------------------------------------------
+// main
+
+int main(void)
+{
+	
+	assert_param(spi_buffer_size > sizeof(DeviceStateBuffer));
+
+	ConfigureDevice();
+
 	while (1)
 	{
-
 		// reset watchdog
 		__HAL_IWDG_RELOAD_COUNTER(&hiwdg);
 
 		// update digital outputs and leds
-		{
-			// check if state buffer has been updated
-			uint8_t error_byte = 0;
-
-			// this holds digital output levels (1-Hi or 0-Low)
-			uint8_t output_level = 0;
-			// this tells if output is enabled or not (1-Enabled, 0-Hi impedance)
-			uint8_t output_enable = 0;
-
-			if (current_state_lock.TryLock())
-			{
-				output_enable = current_device_state.digital_output_enable;
-				output_level = current_device_state.digital_output_level;
-				error_byte = current_device_state.error_byte;
-
-				current_state_lock.Unlock();
-			}
-
-			// update digital outputs
-			DQ_WriteRegister(output_level, output_enable);
-			CheckInternalShortcircuits();
-
-			// blink red led in case of error;
-			const uint32_t blink_time = 1000;
-			const uint32_t blink_enable_time = 200;
-
-			bool pwm_level = (HAL_GetTick() % blink_time) < blink_enable_time;
-			bool led_red_level = (error_byte != 0) && pwm_level;
-			LedRed(led_red_level);
-		}
+		UpdateOutputRoutine();
 
 		// update spi tx register
-		{
-			if (current_state_lock.TryLock())
-			{
-
-				if (current_state_updated)
-				{
-					// copy current state to spi buffer
-					DeviceStateBuffer *spi_buf = (DeviceStateBuffer *)GetFreeSpiBuffer();
-					DeviceState *spi_state_buf = &(spi_buf->device_state);
-
-					// move data to spi
-					memcpy(spi_state_buf, &current_device_state, sizeof(DeviceState));
-
-					// callculate crc
-					spi_buf->crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)&current_device_state, sizeof(DeviceState));
-
-					// notify that content of buffer has been moved to spi_buffer
-					current_state_updated = false;
-
-					TrySwapSpiTxBuffer();
-				}
-				current_state_lock.Unlock();
-			}
-		}
+		UpdateSpiTxBufferRoutine();
 	}
 }
