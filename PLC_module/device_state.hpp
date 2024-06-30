@@ -14,12 +14,12 @@ extern "C"
 
     // error_byte flags
     namespace ErrorFlags{
-        uint8_t internal_device_error      = 0b00000001;
-        uint8_t supply_voltage_to_low      = 0b00000010;
-        uint8_t power_on_reset             = 0b00000100;
-        uint8_t watchdog_triggered         = 0b00001000;
-        uint8_t hardware_or_software_reset = 0b00010000;
-        uint8_t unnown_reset_source        = 0b00100000;
+        const uint8_t internal_device_error      = 0b00000001;
+        const uint8_t supply_voltage_to_low      = 0b00000010;
+        const uint8_t power_on_reset             = 0b00000100;
+        const uint8_t watchdog_triggered         = 0b00001000;
+        const uint8_t hardware_or_software_reset = 0b00010000;
+        const uint8_t unnown_reset_source        = 0b00100000;
     };
 
     struct DeviceState

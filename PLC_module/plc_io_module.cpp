@@ -14,6 +14,7 @@
 #include "output_ports.hpp"
 #include "device_state.hpp"
 #include "raw_mutex.hpp"
+#include "double_buffer.hpp"
 
 HAL_StatusTypeDef status;
 
@@ -48,32 +49,10 @@ volatile uint16_t ConversionTime = 0; // [us]
 // ------------------------------------------------------------------------------------------
 // spi buffers
 
-// RawMutex current_state_lock;
+constexpr uint32_t spi_buffer_size = 50;
 
-constexpr int32_t spi_buffer_size = 50;
-
-volatile uint8_t spi_rx_buffer[spi_buffer_size] = {0};
-
-volatile uint8_t spi_tx_buffer0[spi_buffer_size] = {0xAA, 0xBB, 0x01};
-volatile uint8_t spi_tx_buffer1[spi_buffer_size] = {0xAA, 0xBB, 0x02};
-
-volatile uint8_t spi_active_tx_buffer_nr = 0;
-
-inline volatile uint8_t *GetActiveSpiBuffer()
-{
-	return (spi_active_tx_buffer_nr == 0) ? spi_tx_buffer0 : spi_tx_buffer1;
-}
-
-inline volatile uint8_t *GetFreeSpiBuffer()
-{
-	return (spi_active_tx_buffer_nr == 0) ? spi_tx_buffer1 : spi_tx_buffer0;
-}
-
-inline void TrySwapSpiTxBuffer()
-{
-	// TODO: protect this with mutex or disable interrupts
-	spi_active_tx_buffer_nr = (spi_active_tx_buffer_nr + 1) % 2;
-}
+DoubleBuffer<spi_buffer_size> spi_tx_buffer;
+DoubleBuffer<spi_buffer_size> spi_rx_buffer;
 
 // ------------------------------------------------------------------------------------------
 // ADC callbacks
@@ -83,20 +62,21 @@ HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
 	ConversionTime = htim3.Instance->CNT;
 
-	const uint16_t supply_voltage = AdcToMiliVolt(adc_conversion_result.input_voltage);
-	const uint16_t digital_threshold = supply_voltage >> 1; // supply_voltage / 2
+	const uint16_t supply_voltage_raw = adc_conversion_result.input_voltage;
+	const uint16_t supply_voltage = AdcToMiliVolt(supply_voltage_raw);
+	const uint16_t digital_threshold = supply_voltage_raw >> 1; // supply_voltage / 2
 
 	uint8_t digital_input = 0;
 
 	{
-		digital_input |= adc_conversion_result.analog_input_0 > digital_threshold ? (1 << 0) : 0;
-		digital_input |= adc_conversion_result.analog_input_1 > digital_threshold ? (1 << 1) : 0;
-		digital_input |= adc_conversion_result.analog_input_2 > digital_threshold ? (1 << 2) : 0;
-		digital_input |= adc_conversion_result.analog_input_3 > digital_threshold ? (1 << 3) : 0;
-		digital_input |= adc_conversion_result.analog_input_4 > digital_threshold ? (1 << 4) : 0;
-		digital_input |= adc_conversion_result.analog_input_5 > digital_threshold ? (1 << 5) : 0;
-		digital_input |= adc_conversion_result.analog_input_6 > digital_threshold ? (1 << 6) : 0;
-		digital_input |= adc_conversion_result.analog_input_7 > digital_threshold ? (1 << 7) : 0;
+		digital_input |= (adc_conversion_result.analog_input_0 > digital_threshold) ? (1 << 0) : 0;
+		digital_input |= (adc_conversion_result.analog_input_1 > digital_threshold) ? (1 << 1) : 0;
+		digital_input |= (adc_conversion_result.analog_input_2 > digital_threshold) ? (1 << 2) : 0;
+		digital_input |= (adc_conversion_result.analog_input_3 > digital_threshold) ? (1 << 3) : 0;
+		digital_input |= (adc_conversion_result.analog_input_4 > digital_threshold) ? (1 << 4) : 0;
+		digital_input |= (adc_conversion_result.analog_input_5 > digital_threshold) ? (1 << 5) : 0;
+		digital_input |= (adc_conversion_result.analog_input_6 > digital_threshold) ? (1 << 6) : 0;
+		digital_input |= (adc_conversion_result.analog_input_7 > digital_threshold) ? (1 << 7) : 0;
 	}
 
 	if (current_state_lock.TryLock())
@@ -142,6 +122,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 	if (HAL_GPIO_ReadPin(SPI1_CS_GPIO_Port, SPI1_CS_Pin) == GPIO_PIN_SET)
 	{
+		spi_tx_buffer.AllowSwap();
+		spi_rx_buffer.AllowSwap();
 		// rising edge (master finished communication)
 
 		// solution to tx fifo problem found there
@@ -163,18 +145,22 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		{
 			Error_Handler();
 		}
+
+		// TODO: parse received data from SPI
 	}
 	else
 	{
 		// falling edge (master started communication)
 		// setup spi transmision
-		status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)GetActiveSpiBuffer(), (uint8_t *)spi_rx_buffer, spi_buffer_size);
+		spi_tx_buffer.PreventSwap();
+		spi_rx_buffer.PreventSwap();
+
+		status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)spi_tx_buffer.GetActive(), (uint8_t *)spi_rx_buffer.GetActive(), spi_buffer_size);
 	}
 }
 
 void HAL_SPI_AbortCpltCallback(SPI_HandleTypeDef *hspi)
 {
-	status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)GetActiveSpiBuffer(), (uint8_t *)spi_rx_buffer, spi_buffer_size);
 }
 
 // ------------------------------------------------------------------------------------------
@@ -231,11 +217,11 @@ static void LedRed(bool enable)
 	HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, state);
 }
 
-//static void LedOrange(bool enable)
+// static void LedOrange(bool enable)
 //{
 //	GPIO_PinState state = enable ? GPIO_PIN_SET : GPIO_PIN_RESET;
 //	HAL_GPIO_WritePin(LED_ORANGE_GPIO_Port, LED_ORANGE_Pin, state);
-//}
+// }
 
 static void LedGreen(bool enable)
 {
@@ -243,90 +229,54 @@ static void LedGreen(bool enable)
 	HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, state);
 }
 
-
 // ------------------------------------------------------------------------------------------
 // get reset reason
 
-enum class ResetReason
-{
-	UNNOWN = 0,
-	LOW_POWER_MANAGEMENT,
-	WINDOW_WATCHDOG,
-	INDEPENDENT_WATCHDOG,
-	SOFTWARE_RESET,
-	POWER_ON_RESET,
-	POWER_ON_1_8_DOMAIN_RESET,
-	NRST_PIN_RESET,
-	OPTION_BYTE_LOADER,
-};
-
-ResetReason GetResetReason()
-{
-	if (__HAL_RCC_GET_FLAG(RCC_FLAG_OBLRST))
-		return ResetReason::OPTION_BYTE_LOADER;
-	if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST))
-		return ResetReason::NRST_PIN_RESET;
-	if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST))
-		return ResetReason::POWER_ON_RESET;
-	if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST))
-		return ResetReason::SOFTWARE_RESET;
-	if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST))
-		return ResetReason::INDEPENDENT_WATCHDOG;
-	if (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDGRST))
-		return ResetReason::WINDOW_WATCHDOG;
-	if (__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST))
-		return ResetReason::LOW_POWER_MANAGEMENT;
-	if (__HAL_RCC_GET_FLAG(RCC_CSR_V18PWRRSTF))
-		return ResetReason::POWER_ON_1_8_DOMAIN_RESET;
-
-	return ResetReason::UNNOWN;
-}
-
 void SetInitialErrorFlag()
 {
-	ResetReason reset_reason = GetResetReason();
+	uint8_t errorbyte = 0;
 
-	switch (reset_reason)
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST)) // POWER_ON_RESET
 	{
-	case ResetReason::UNNOWN:
-		current_device_state.error_byte |= ErrorFlags::unnown_reset_source;
-		break;
-
-	case ResetReason::NRST_PIN_RESET:
-		current_device_state.error_byte |= ErrorFlags::unnown_reset_source;
-		break;
-
-	case ResetReason::OPTION_BYTE_LOADER:
-		current_device_state.error_byte |= ErrorFlags::unnown_reset_source;
-		break;
-
-	case ResetReason::LOW_POWER_MANAGEMENT:
-		current_device_state.error_byte |= ErrorFlags::hardware_or_software_reset;
-		break;
-
-	case ResetReason::SOFTWARE_RESET:
-		current_device_state.error_byte |= ErrorFlags::hardware_or_software_reset;
-		break;
-
-	case ResetReason::WINDOW_WATCHDOG:
-		current_device_state.error_byte |= ErrorFlags::watchdog_triggered;
-		break;
-
-	case ResetReason::INDEPENDENT_WATCHDOG:
-		current_device_state.error_byte |= ErrorFlags::watchdog_triggered;
-		break;
-
-	case ResetReason::POWER_ON_RESET:
-		current_device_state.error_byte |= ErrorFlags::power_on_reset;
-		break;
-
-	case ResetReason::POWER_ON_1_8_DOMAIN_RESET:
-		current_device_state.error_byte |= ErrorFlags::power_on_reset;
-		break;
-
-	default:
-		current_device_state.error_byte |= ErrorFlags::unnown_reset_source;
+		errorbyte |= ErrorFlags::power_on_reset;
 	}
+
+	if (__HAL_RCC_GET_FLAG(RCC_CSR_V18PWRRSTF)) // POWER_ON_1_8_DOMAIN_RESET
+	{
+		errorbyte |= ErrorFlags::power_on_reset;
+	}
+
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST)) // INDEPENDENT_WATCHDOG
+	{
+		errorbyte |= ErrorFlags::watchdog_triggered;
+	}
+
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDGRST)) // WINDOW_WATCHDOG
+	{
+		errorbyte |= ErrorFlags::watchdog_triggered;
+	}
+
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST)) // NRST_PIN_RESET
+	{
+		errorbyte |= ErrorFlags::hardware_or_software_reset;
+	}
+
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST)) // SOFTWARE_RESET
+	{
+		errorbyte |= ErrorFlags::hardware_or_software_reset;
+	}
+
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_OBLRST)) // OPTION_BYTE_LOADER
+	{
+		errorbyte |= ErrorFlags::unnown_reset_source;
+	}
+
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST)) // LOW_POWER_MANAGEMENT
+	{
+		errorbyte |= ErrorFlags::unnown_reset_source;
+	}
+
+	current_device_state.error_byte = errorbyte;
 }
 
 // ------------------------------------------------------------------------------------------
@@ -374,7 +324,7 @@ void UpdateSpiTxBufferRoutine()
 		if (current_state_updated)
 		{
 			// copy current state to spi buffer
-			DeviceStateBuffer *spi_buf = (DeviceStateBuffer *)GetFreeSpiBuffer();
+			DeviceStateBuffer *spi_buf = (DeviceStateBuffer *)spi_tx_buffer.GetFree();
 			DeviceState *spi_state_buf = &(spi_buf->device_state);
 
 			// move data to spi
@@ -386,7 +336,7 @@ void UpdateSpiTxBufferRoutine()
 			// notify that content of buffer has been moved to spi_buffer
 			current_state_updated = false;
 
-			TrySwapSpiTxBuffer();
+			spi_tx_buffer.TrySwap();
 		}
 		current_state_lock.Unlock();
 	}
@@ -435,7 +385,7 @@ void ConfigureDevice()
 	HAL_TIM_Base_Start_IT(&htim_adc_trigger);
 
 	// enable SPI interface
-	status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)GetActiveSpiBuffer(), (uint8_t *)spi_rx_buffer, spi_buffer_size);
+	// status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)spi_tx_buffer.GetActive(), (uint8_t *)spi_rx_buffer.GetActive(), spi_buffer_size);
 
 	// signal that device is working correctly
 	LedGreen(true);
@@ -446,8 +396,9 @@ void ConfigureDevice()
 
 int main(void)
 {
-	
+
 	assert_param(spi_buffer_size > sizeof(DeviceStateBuffer));
+	assert_param(spi_tx_buffer.capacity > sizeof(DeviceStateBuffer));
 
 	ConfigureDevice();
 

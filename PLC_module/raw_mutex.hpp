@@ -12,7 +12,7 @@ public:
 
     // returns true on successful acquisition
     // returns false if already locked
-    bool TryLock()
+    inline bool TryLock()
     {
         bool is_lock_successfull = false;
         __disable_irq();
@@ -25,10 +25,11 @@ public:
         return is_lock_successfull;
     }
 
-    void Unlock()
+    inline void Unlock()
     {
         __disable_irq();
         mutex = false;
         __enable_irq();
     }
+
 };
