@@ -2,6 +2,7 @@
 #include <inttypes.h>
 #include <math.h>
 #include "main.h"
+#include "iwdg.h"
 #include "adc.h"
 #include "dma.h"
 #include "tim.h"
@@ -13,10 +14,6 @@
 #include "output_ports.hpp"
 #include "device_state.hpp"
 #include "raw_mutex.hpp"
-
-
-
-
 
 HAL_StatusTypeDef status;
 
@@ -366,15 +363,18 @@ int main(void)
 
 	assert_param(spi_buffer_size > sizeof(DeviceStateBuffer));
 
+	HAL_Init();
+
+	// immediately enable WatchDog
+	MX_IWDG_Init();
+
+	// setup device error flags
 	SetInitialErrorFlag();
 
 	// clear reset flags
 	__HAL_RCC_CLEAR_RESET_FLAGS();
 
 	// initialize other peripherals
-
-	HAL_Init();
-
 	SystemClock_Config();
 	MX_CRC_Init();
 	MX_GPIO_Init();
@@ -406,6 +406,9 @@ int main(void)
 	while (1)
 	{
 
+		// reset watchdog
+		__HAL_IWDG_RELOAD_COUNTER(&hiwdg);
+
 		// update digital outputs and leds
 		{
 			// check if state buffer has been updated
@@ -416,11 +419,14 @@ int main(void)
 			// this tells if output is enabled or not (1-Enabled, 0-Hi impedance)
 			uint8_t output_enable = 0;
 
-			__disable_irq();
-			output_enable = current_device_state.digital_output_enable;
-			output_level = current_device_state.digital_output_level;
-			error_byte = current_device_state.error_byte;
-			__enable_irq();
+			if (current_state_lock.TryLock())
+			{
+				output_enable = current_device_state.digital_output_enable;
+				output_level = current_device_state.digital_output_level;
+				error_byte = current_device_state.error_byte;
+
+				current_state_lock.Unlock();
+			}
 
 			// update digital outputs
 			DQ_WriteRegister(output_level, output_enable);
@@ -437,7 +443,6 @@ int main(void)
 
 		// update spi tx register
 		{
-			__disable_irq();
 			if (current_state_lock.TryLock())
 			{
 
