@@ -14,6 +14,10 @@
 #include "device_state.hpp"
 #include "raw_mutex.hpp"
 
+
+
+
+
 HAL_StatusTypeDef status;
 
 // ------------------------------------------------------------------------------------------
@@ -270,12 +274,104 @@ static void LedGreenToggle()
 }
 
 // ------------------------------------------------------------------------------------------
+// get reset reason
+
+enum class ResetReason
+{
+	UNNOWN = 0,
+	LOW_POWER_MANAGEMENT,
+	WINDOW_WATCHDOG,
+	INDEPENDENT_WATCHDOG,
+	SOFTWARE_RESET,
+	POWER_ON_RESET,
+	POWER_ON_1_8_DOMAIN_RESET,
+	NRST_PIN_RESET,
+	OPTION_BYTE_LOADER,
+};
+
+ResetReason GetResetReason()
+{
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_OBLRST))
+		return ResetReason::OPTION_BYTE_LOADER;
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST))
+		return ResetReason::NRST_PIN_RESET;
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST))
+		return ResetReason::POWER_ON_RESET;
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST))
+		return ResetReason::SOFTWARE_RESET;
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST))
+		return ResetReason::INDEPENDENT_WATCHDOG;
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDGRST))
+		return ResetReason::WINDOW_WATCHDOG;
+	if (__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST))
+		return ResetReason::LOW_POWER_MANAGEMENT;
+	if (__HAL_RCC_GET_FLAG(RCC_CSR_V18PWRRSTF))
+		return ResetReason::POWER_ON_1_8_DOMAIN_RESET;
+
+	return ResetReason::UNNOWN;
+}
+
+void SetInitialErrorFlag()
+{
+	ResetReason reset_reason = GetResetReason();
+
+	switch (reset_reason)
+	{
+	case ResetReason::UNNOWN:
+		current_device_state.error_byte |= ErrorFlags::unnown_reset_source;
+		break;
+
+	case ResetReason::NRST_PIN_RESET:
+		current_device_state.error_byte |= ErrorFlags::unnown_reset_source;
+		break;
+
+	case ResetReason::OPTION_BYTE_LOADER:
+		current_device_state.error_byte |= ErrorFlags::unnown_reset_source;
+		break;
+
+	case ResetReason::LOW_POWER_MANAGEMENT:
+		current_device_state.error_byte |= ErrorFlags::hardware_or_software_reset;
+		break;
+
+	case ResetReason::SOFTWARE_RESET:
+		current_device_state.error_byte |= ErrorFlags::hardware_or_software_reset;
+		break;
+
+	case ResetReason::WINDOW_WATCHDOG:
+		current_device_state.error_byte |= ErrorFlags::watchdog_triggered;
+		break;
+
+	case ResetReason::INDEPENDENT_WATCHDOG:
+		current_device_state.error_byte |= ErrorFlags::watchdog_triggered;
+		break;
+
+	case ResetReason::POWER_ON_RESET:
+		current_device_state.error_byte |= ErrorFlags::power_on_reset;
+		break;
+
+	case ResetReason::POWER_ON_1_8_DOMAIN_RESET:
+		current_device_state.error_byte |= ErrorFlags::power_on_reset;
+		break;
+
+	default:
+		current_device_state.error_byte |= ErrorFlags::unnown_reset_source;
+	}
+}
+
+// ------------------------------------------------------------------------------------------
 // main
 
 int main(void)
 {
 
-	//	assert_param(spi_tx_buf.capacity > sizeof(DeviceStateBuffer));
+	assert_param(spi_buffer_size > sizeof(DeviceStateBuffer));
+
+	SetInitialErrorFlag();
+
+	// clear reset flags
+	__HAL_RCC_CLEAR_RESET_FLAGS();
+
+	// initialize other peripherals
 
 	HAL_Init();
 
