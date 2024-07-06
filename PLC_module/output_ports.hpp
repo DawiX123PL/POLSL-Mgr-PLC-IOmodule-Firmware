@@ -4,6 +4,8 @@
 
 
 
+#define CHECK_INTERNAL_SHORT_CIRCUITS
+
 
 void DQ_Write(uint8_t output_number, bool out_level, bool enable);
 void DQ_WriteRegister(uint8_t level_reg, uint8_t enable_reg);

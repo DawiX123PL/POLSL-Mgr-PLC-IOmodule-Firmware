@@ -158,6 +158,8 @@ void DQ_Write(uint8_t output_number, bool out_level, bool enable)
 
 void CheckInternalShortcircuits(void)
 {
+#ifdef CHECK_INTERNAL_SHORT_CIRCUITS
+
 	assert_param((HAL_GPIO_ReadPin(DQ0_HIGH_GPIO_Port, DQ0_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ0_LOW_GPIO_Port, DQ0_LOW_Pin) != 1));
 	assert_param((HAL_GPIO_ReadPin(DQ1_HIGH_GPIO_Port, DQ1_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ1_LOW_GPIO_Port, DQ1_LOW_Pin) != 1));
 	assert_param((HAL_GPIO_ReadPin(DQ2_HIGH_GPIO_Port, DQ2_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ2_LOW_GPIO_Port, DQ2_LOW_Pin) != 1));
@@ -166,4 +168,6 @@ void CheckInternalShortcircuits(void)
 	assert_param((HAL_GPIO_ReadPin(DQ5_HIGH_GPIO_Port, DQ5_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ5_LOW_GPIO_Port, DQ5_LOW_Pin) != 1));
 	assert_param((HAL_GPIO_ReadPin(DQ6_HIGH_GPIO_Port, DQ6_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ6_LOW_GPIO_Port, DQ6_LOW_Pin) != 1));
 	assert_param((HAL_GPIO_ReadPin(DQ7_HIGH_GPIO_Port, DQ7_HIGH_Pin) != 1) || (HAL_GPIO_ReadPin(DQ7_LOW_GPIO_Port, DQ7_LOW_Pin) != 1));
+
+#endif
 }

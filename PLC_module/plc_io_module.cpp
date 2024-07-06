@@ -19,6 +19,32 @@
 HAL_StatusTypeDef status;
 
 // ------------------------------------------------------------------------------------------
+// performance measurements
+
+struct Performance
+{
+
+	static inline uint16_t GetTick()
+	{
+		return __HAL_TIM_GET_COUNTER(&htim_performance_measure);
+	}
+
+	static inline uint16_t CalculateDuration(uint16_t start_tick)
+	{
+		return GetTick() - start_tick;
+	}
+
+	uint16_t adc_result_parse;
+	uint16_t init_spi_communication;
+	uint16_t finish_spi_communication;
+	uint16_t update_output;
+	uint16_t update_spi_tx_buffer;
+	uint16_t main_loop;
+};
+
+volatile Performance performance;
+
+// ------------------------------------------------------------------------------------------
 // modules current state
 
 RawMutex current_state_lock;
@@ -62,6 +88,8 @@ HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
 	ConversionTime = htim3.Instance->CNT;
 
+	uint16_t start_tick = Performance::GetTick(); // get timer tick before parsing adc data
+
 	const uint16_t supply_voltage_raw = adc_conversion_result.input_voltage;
 	const uint16_t supply_voltage = AdcToMiliVolt(supply_voltage_raw);
 	const uint16_t digital_threshold = supply_voltage_raw >> 1; // supply_voltage / 2
@@ -99,6 +127,8 @@ HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 
 		current_state_lock.Unlock();
 	}
+
+	performance.adc_result_parse = Performance::CalculateDuration(start_tick); // store calculation performance
 }
 
 extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
@@ -120,8 +150,13 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
+	uint16_t start_tick = Performance::GetTick();
+
 	if (HAL_GPIO_ReadPin(SPI1_CS_GPIO_Port, SPI1_CS_Pin) == GPIO_PIN_SET)
 	{
+		uint32_t received_bytes = __HAL_DMA_GET_COUNTER(hspi1.hdmarx);
+		spi_rx_buffer.ActiveSize() = received_bytes;
+
 		spi_tx_buffer.AllowSwap();
 		spi_rx_buffer.AllowSwap();
 		// rising edge (master finished communication)
@@ -146,6 +181,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 			Error_Handler();
 		}
 
+		performance.finish_spi_communication = Performance::CalculateDuration(start_tick);
+
 		// TODO: parse received data from SPI
 	}
 	else
@@ -156,6 +193,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		spi_rx_buffer.PreventSwap();
 
 		status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)spi_tx_buffer.GetActive(), (uint8_t *)spi_rx_buffer.GetActive(), spi_buffer_size);
+
+		performance.init_spi_communication = Performance::CalculateDuration(start_tick);
 	}
 }
 
@@ -365,27 +404,30 @@ void ConfigureDevice()
 	MX_DMA_Init();
 	MX_ADC_Init();
 	MX_TIM3_Init();
+	MX_TIM17_Init();
 
-	// External Interrupt MUST be initialized, before spi
-	// Thanks DAnsp
-	// https://community.st.com/t5/stm32-mcus-products/spi-slave-nss-interrupt/td-p/394501
-	ConfigureSPI_CS_Interrupt();
-	ConfigureSPI1();
-	// MX_SPI1_Init(); // this line can be usefull in future
-
-	HAL_SPI_GetState(&hspi1);
+	{
+		// External Interrupt MUST be initialized, before spi
+		// Thanks DAnsp
+		// https://community.st.com/t5/stm32-mcus-products/spi-slave-nss-interrupt/td-p/394501
+		ConfigureSPI_CS_Interrupt();
+		ConfigureSPI1();
+		// MX_SPI1_Init(); // this line can be usefull in future
+	}
 
 	// enable adc
-	HAL_ADCEx_Calibration_Start(&hadc);
-	while (HAL_ADC_GetState(&hadc) != HAL_ADC_STATE_READY)
 	{
-	} // todo: handle error case
+		HAL_ADCEx_Calibration_Start(&hadc);
+		while (HAL_ADC_GetState(&hadc) != HAL_ADC_STATE_READY)
+		{
+		} // todo: handle error case
 
-	HAL_ADC_Start_DMA(&hadc, (uint32_t *)&adc_conversion_result, ADCConversionResult::length);
-	HAL_TIM_Base_Start_IT(&htim_adc_trigger);
+		HAL_ADC_Start_DMA(&hadc, (uint32_t *)&adc_conversion_result, ADCConversionResult::length);
+		HAL_TIM_Base_Start_IT(&htim_adc_trigger);
+	}
 
-	// enable SPI interface
-	// status = HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)spi_tx_buffer.GetActive(), (uint8_t *)spi_rx_buffer.GetActive(), spi_buffer_size);
+	// enable clock for performance measurements
+	HAL_TIM_Base_Start(&htim_performance_measure);
 
 	// signal that device is working correctly
 	LedGreen(true);
@@ -404,13 +446,35 @@ int main(void)
 
 	while (1)
 	{
+		// get current time to measure software performance
+		uint16_t start_tick = Performance::GetTick();
+
 		// reset watchdog
 		__HAL_IWDG_RELOAD_COUNTER(&hiwdg);
 
-		// update digital outputs and leds
-		UpdateOutputRoutine();
+		{
+			// get current time to measure software performance
+			uint16_t start_tick = Performance::GetTick();
 
-		// update spi tx register
-		UpdateSpiTxBufferRoutine();
+			// update digital outputs and leds
+			UpdateOutputRoutine();
+
+			// calculate software performance
+			performance.update_output = Performance::CalculateDuration(start_tick);
+		}
+
+		{
+			// get current time to measure software performance
+			uint16_t start_tick = Performance::GetTick();
+
+			// update spi tx register
+			UpdateSpiTxBufferRoutine();
+
+			// calculate software performance
+			performance.update_spi_tx_buffer = Performance::CalculateDuration(start_tick);
+		}
+
+		// calculate software performance
+		performance.main_loop = Performance::CalculateDuration(start_tick);
 	}
 }
