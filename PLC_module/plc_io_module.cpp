@@ -131,12 +131,116 @@ HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 	performance.adc_result_parse = Performance::CalculateDuration(start_tick); // store calculation performance
 }
 
-extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+// ------------------------------------------------------------------------------------------
+// Parse command
+
+void ParseCommand(const uint8_t *const data, uint32_t size)
 {
+	constexpr uint8_t command_nop = 0;
+	constexpr uint8_t command_clear_error = 1;
+	constexpr uint8_t command_write_dq = 2;
+
+	// command must contain command_byte and crc_byte
+	if (size < 2)
+	{
+		return;
+	}
+
+	// step 1 - verify crc
+
+	uint8_t crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)data, size - 1);
+	if (data[size - 1] != crc)
+	{
+		// crc not match
+		if (current_state_lock.TryLock())
+		{
+			current_device_state.status_byte |= StatusFlags::crc_error;
+			current_state_lock.Unlock();
+		}
+		// return;
+	}
+
+	// reset spi timeout timer
+	__HAL_TIM_SetCounter(&htim_spi_timeout, 0);
+
+	// step 2 - check command and excecude
+	uint8_t command = data[0];
+
+	// [command; crc]
+	if (command == command_nop)
+	{
+		return;
+	}
+
+	// [command; crc]
+	if (command == command_clear_error)
+	{
+		if (current_state_lock.TryLock())
+		{
+			current_device_state.error_byte = 0;
+			current_state_lock.Unlock();
+		}
+		return;
+	}
+
+	// [command; digital_output_level; digital_output_enable; crc]
+	if (command == command_write_dq)
+	{
+		if (size < 4)
+		{
+			if (current_state_lock.TryLock())
+			{
+				current_device_state.status_byte |= StatusFlags::invalid_command;
+				current_state_lock.Unlock();
+			}
+			return;
+		}
+
+		if (current_state_lock.TryLock())
+		{
+			current_device_state.digital_output_level = data[1];
+			current_device_state.digital_output_enable = data[2];
+			current_state_lock.Unlock();
+		}
+		return;
+	}
+
+	// invalid command
+	if (current_state_lock.TryLock())
+	{
+		current_device_state.status_byte |= StatusFlags::invalid_command;
+		current_state_lock.Unlock();
+	}
+}
+
+void ParseSpiCommand()
+{
+	spi_rx_buffer.TrySwap();
+
+	if (spi_rx_buffer.FreeSize())
+	{
+		ParseCommand((uint8_t *)spi_rx_buffer.GetFree(), spi_rx_buffer.FreeSize());
+	}
+
+	spi_rx_buffer.FreeSize() = 0;
+	current_state_lock.Unlock();
 }
 
 // ------------------------------------------------------------------------------------------
 // SPI callbacks
+
+extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+	if (htim == &htim_spi_timeout)
+	{
+		// spi communication timeout
+		if (current_state_lock.TryLock())
+		{
+			current_device_state.error_byte |= ErrorFlags::communication_timeout;
+			current_state_lock.Unlock();
+		}
+	}
+}
 
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 {
@@ -154,7 +258,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 	if (HAL_GPIO_ReadPin(SPI1_CS_GPIO_Port, SPI1_CS_Pin) == GPIO_PIN_SET)
 	{
-		uint32_t received_bytes = __HAL_DMA_GET_COUNTER(hspi1.hdmarx);
+		uint32_t received_bytes = spi_rx_buffer.capacity - __HAL_DMA_GET_COUNTER(hspi1.hdmarx);
 		spi_rx_buffer.ActiveSize() = received_bytes;
 
 		spi_tx_buffer.AllowSwap();
@@ -184,6 +288,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		performance.finish_spi_communication = Performance::CalculateDuration(start_tick);
 
 		// TODO: parse received data from SPI
+		ParseSpiCommand();
 	}
 	else
 	{
@@ -333,16 +438,29 @@ void UpdateOutputRoutine()
 
 	if (current_state_lock.TryLock())
 	{
+		error_byte = current_device_state.error_byte;
+		if (error_byte)
+		{
+			current_device_state.digital_output_enable = 0;
+			current_device_state.digital_output_level = 0;
+		}
 		output_enable = current_device_state.digital_output_enable;
 		output_level = current_device_state.digital_output_level;
-		error_byte = current_device_state.error_byte;
 
 		current_state_lock.Unlock();
 	}
 
 	// update digital outputs
-	DQ_WriteRegister(output_level, output_enable);
-	CheckInternalShortcircuits();
+	if (error_byte)
+	{
+		DQ_WriteRegister(0, 0);
+		CheckInternalShortcircuits();
+	}
+	else
+	{
+		DQ_WriteRegister(output_level, output_enable);
+		CheckInternalShortcircuits();
+	}
 
 	// blink red led in case of error;
 	const uint32_t blink_time = 1000;
@@ -360,7 +478,7 @@ void UpdateSpiTxBufferRoutine()
 {
 	if (current_state_lock.TryLock())
 	{
-		if (current_state_updated)
+		// if (current_state_updated)
 		{
 			// copy current state to spi buffer
 			DeviceStateBuffer *spi_buf = (DeviceStateBuffer *)spi_tx_buffer.GetFree();
@@ -405,6 +523,7 @@ void ConfigureDevice()
 	MX_ADC_Init();
 	MX_TIM3_Init();
 	MX_TIM17_Init();
+	MX_TIM16_Init();
 
 	{
 		// External Interrupt MUST be initialized, before spi
@@ -413,6 +532,8 @@ void ConfigureDevice()
 		ConfigureSPI_CS_Interrupt();
 		ConfigureSPI1();
 		// MX_SPI1_Init(); // this line can be usefull in future
+
+		HAL_TIM_Base_Start_IT(&htim_spi_timeout);
 	}
 
 	// enable adc

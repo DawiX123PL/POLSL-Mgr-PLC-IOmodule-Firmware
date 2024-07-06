@@ -14,7 +14,8 @@ extern "C"
 
     // error_byte flags
     namespace StatusFlags{
-        const uint8_t crc_error = 0b00000001;
+        const uint8_t crc_error                  = 0b00000001;
+        const uint8_t invalid_command            = 0b00000010;
     };
 
     namespace ErrorFlags{
@@ -24,7 +25,7 @@ extern "C"
         const uint8_t watchdog_triggered         = 0b00001000;
         const uint8_t hardware_or_software_reset = 0b00010000;
         const uint8_t unnown_reset_source        = 0b00100000;
-        const uint8_t invalid_command            = 0b01000000;
+        const uint8_t communication_timeout      = 0b01000000;
     };
 
     struct DeviceState

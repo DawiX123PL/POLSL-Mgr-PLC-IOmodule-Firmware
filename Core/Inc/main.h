@@ -59,6 +59,7 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define htim_adc_trigger htim3
 #define htim_performance_measure htim17
+#define htim_spi_timeout htim16
 #define CONFIG_1_Pin GPIO_PIN_13
 #define CONFIG_1_GPIO_Port GPIOC
 #define DQ6_HIGH_Pin GPIO_PIN_14
