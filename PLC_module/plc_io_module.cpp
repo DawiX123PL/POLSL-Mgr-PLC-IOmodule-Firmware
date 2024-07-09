@@ -488,6 +488,12 @@ void UpdateSpiTxBufferRoutine()
 			memcpy(spi_state_buf, &current_device_state, sizeof(DeviceState));
 
 			// callculate crc
+			//
+			// Polynomial       - 0x4C11DB7
+			// Initial value    - 0xFFFFFFFF
+			// Final XOR        - 0x0
+			// Input Reflected  - NOPE
+			// Output Reflected - NOPE
 			spi_buf->crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)&current_device_state, sizeof(DeviceState));
 
 			// notify that content of buffer has been moved to spi_buffer
